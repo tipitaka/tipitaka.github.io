@@ -13082,9 +13082,7 @@ var resultlist=React.createClass({displayName: 'resultlist',  //should search re
    
 var main = React.createClass({displayName: 'main',
   componentDidMount:function() {
-      Kde.openLocal("cbeta.kdb",function(db){
-        this.setState({db:db});  
-      },this);  
+
   }, 
   getInitialState: function() {
     return {res:null,db:null };
@@ -13113,6 +13111,9 @@ var main = React.createClass({displayName: 'main',
   }, 
   onReady:function(usage,quota) {
     this.setState({quota:quota,usage:usage});
+    Kde.openLocal("cbeta.kdb",function(db){
+        this.setState({db:db});  
+    },this);      
   },        
   render: function() {  //main render routine
     if (!this.state.quota) { // install required db
@@ -13585,13 +13586,13 @@ var htmlfs = React.createClass({displayName: 'htmlfs',
 	},
 	queryQuota:function() {
 		html5fs.queryQuota(function(usage,quota){
-			this.setState({usage:usage,quota:quota,Initialized:true});
+			this.setState({usage:usage,quota:quota,initialized:true});
 		},this);
 	},
 	render:function() {
 		var that=this;
-		if (!this.state.quota) {
-			if (this.state.Initialized) {
+		if (!this.state.quota || this.state.quota<this.props.quota) {
+			if (this.state.initialized) {
 				this.dialog=true;
 				return this.welcome();	
 			} else {

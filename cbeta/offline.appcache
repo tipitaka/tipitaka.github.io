@@ -1,12 +1,12 @@
 CACHE MANIFEST
-# Updated on Thu Jul 31 2014 13:19:02 GMT+0800 (Taipei Standard Time)
+# Updated on Thu Jul 31 2014 14:59:52 GMT+0800 (Taipei Standard Time)
 # Updated on Mon Jul 28 2014 13:23:08 GMT+0800 (Taipei Standard Time)
-/cbeta/index.html
-/cbeta/build/build.js
-/cbeta/build/build.css
-/cbeta/jquery.js
-/cbeta/react-with-addons.js
+/index.html
+/build/build.js
+/build/build.css
+/jquery.js
+/react-with-addons.js
 NETWORK:
-/cbeta/jiangkangyur.kdb
-/cbeta/cbeta.kdb
+/jiangkangyur.kdb
+/cbeta.kdb
 http://ya.ksana.tw/kdb/cbeta.kdb
