@@ -13112,18 +13112,27 @@ var main = React.createClass({displayName: 'main',
   onReady:function(usage,quota) {
     this.setState({quota:quota,usage:usage});
     Kde.openLocal("cbeta.kdb",function(db){
-        this.setState({db:db});  
+        this.setState({db:db,dialog:false});  
     },this);      
-  },        
+  },
+  openFileinstaller:function(autoclose) {
+    return fileinstaller( {quota:"512M", autoclose:autoclose, needed:require_kdb, 
+                     onReady:this.onReady})
+  },
+  fidialog:function() {
+      this.setState({dialog:true});
+  },
   render: function() {  //main render routine
     if (!this.state.quota) { // install required db
-      return fileinstaller( {quota:"512M", autoclose:"true", needed:require_kdb, 
-                     onReady:this.onReady})
+        return this.openFileinstaller(true);
     } else { 
     return (
       React.DOM.div(null, 
+        this.state.dialog?this.openFileinstaller():null,
+        React.DOM.button( {onClick:this.fidialog}, "file installer"),
         React.DOM.div( {className:"col-md-3 nopadding"}, 
             this.renderinputs(),
+            
             resultlist( {res:this.state.res})
         ),
         React.DOM.div( {className:"col-md-5 nopadding"}
@@ -13537,7 +13546,8 @@ var htmlfs = React.createClass({displayName: 'htmlfs',
 		          React.DOM.h4( {className:"modal-title"}, "Welcome")
 		        ),
 		        React.DOM.div( {className:"modal-body"}, 
-		          this.props.welcome?welcome():"welcome message"
+		          this.props.welcome?welcome():"welcome message",
+		          "Browser will ask for your confirmation."
 		        ),
 		        React.DOM.div( {className:"modal-footer"}, 
 		          React.DOM.button( {onClick:this.initFilesystem, type:"button", 
