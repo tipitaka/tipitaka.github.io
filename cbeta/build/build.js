@@ -6346,9 +6346,10 @@ var download=function(url,fn,cb,statuscb,context) {
        xhr.open('get', url, true);
        xhr.setRequestHeader('Range', 'bytes='+batches[b]+'-'+(batches[b+1]-1));
        xhr.responseType = 'blob';    
+       var create=(b==0);
        xhr.addEventListener('load', function() {
          var blob=this.response;
-         API.fs.root.getFile(tempfn, {create: true, exclusive: false}, function(fileEntry) {
+         API.fs.root.getFile(tempfn, {create: create, exclusive: false}, function(fileEntry) {
             fileEntry.createWriter(function(fileWriter) {
               fileWriter.seek(fileWriter.length);
               fileWriter.write(blob);
@@ -13052,7 +13053,7 @@ require.register("cbeta2014-main/index.js", function(exports, require, module){
      
      辭典搜尋。搜尋可能名詞。 先取句子。再從游標處做 prefix search ， 退後n字再找。
 
-     對讀。  
+     對讀。   
 
 */ 
 var require_kdb=[{ 
