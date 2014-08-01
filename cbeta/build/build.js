@@ -7977,6 +7977,11 @@ var resultlist=function(engine,Q,opts,cb) {
 		cb(output);
 		return;
 	} 
+	if (opts.range) {
+		if (opts.range.maxhit && !opts.range.maxfile) {
+			opts.range.maxfile=opts.range.maxhit;
+		}
+	}
 	var fileWithHits=getFileWithHits(engine,Q,opts.range);
 	if (!fileWithHits.length) {
 		cb(output);
@@ -13088,9 +13093,10 @@ var main = React.createClass({displayName: 'main',
     return {res:null,db:null };
   },
   dosearch:function() {
+    var t=new Date();
     var tofind=this.refs.tofind.getDOMNode().value; // get tofind
     Kse.search(this.state.db,tofind,{range:{start:0,maxhit:20}},function(data){ //call search engine
-      this.setState({res:data});
+      this.setState({res:data,elapse:(new Date()-t)+"ms"});
       //console.log(data) ; // watch the result from search engine
     });
   },
@@ -13111,9 +13117,10 @@ var main = React.createClass({displayName: 'main',
   }, 
   onReady:function(usage,quota) {
     this.setState({quota:quota,usage:usage});
-    Kde.openLocal("cbeta.kdb",function(db){
-        this.setState({db:db,dialog:false});  
+    if (!this.state.db) Kde.openLocal("cbeta.kdb",function(db){
+        this.setState({db:db});  
     },this);      
+    this.setState({dialog:false});
   },
   openFileinstaller:function(autoclose) {
     return fileinstaller( {quota:"512M", autoclose:autoclose, needed:require_kdb, 
@@ -13130,19 +13137,13 @@ var main = React.createClass({displayName: 'main',
       React.DOM.div(null, 
         this.state.dialog?this.openFileinstaller():null,
         React.DOM.button( {onClick:this.fidialog}, "file installer"),
-        React.DOM.div( {className:"col-md-3 nopadding"}, 
-            this.renderinputs(),
-            
+            this.renderinputs(),            
+          React.DOM.span(null, this.state.elapse),    
             resultlist( {res:this.state.res})
-        ),
-        React.DOM.div( {className:"col-md-5 nopadding"}
-        ),
-        React.DOM.div( {className:"col-md-4 nopadding"}
-        )
       )
     );
   }
-  }
+  } 
 });
 module.exports=main; //common JS
 });
