@@ -4322,7 +4322,9 @@ var initIndexer=function(mkdbconfig) {
 	isSkip=api["isSkip"];
 	tokenize=api["tokenize"];
 
-	session.kdbfn=session.config.name+'.kdb';
+	var folder=session.config.outdir||".";
+	session.kdbfn=require("path").resolve(folder, session.config.name+'.kdb');
+
 	if (!session.config.reset && nodeRequire("fs").existsSync(session.kdbfn)) {
 		//if old kdb exists and not reset 
 		Kde.openLocal(session.kdbfn,function(db){
@@ -4442,7 +4444,7 @@ var finalize=function(cb) {
 	//console.log(JSON.stringify(session.json,""," "));
 
 	var json=optimize4kdb(session.json);
-	console.log("saving kdb",session.kdbfn);
+	console.log("output to",session.kdbfn);
 	kdbw.save(json,null,{autodelete:true});
 	
 	kdbw.writeFile(session.kdbfn,function(total,written) {
@@ -6302,8 +6304,21 @@ var open=function(fn_url,cb) {
 var load=function(filename,mode,cb) {
   open(filename,mode,cb,true);
 }
-
-var  get_downloadsize=function(url, callback) {
+var get_date=function(url,callback) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("HEAD", url, true); // Notice "HEAD" instead of "GET", //  to get only the header
+    xhr.onreadystatechange = function() {
+        if (this.readyState == this.DONE) {
+          callback(xhr.getResponseHeader("Last-Modified"));
+        } else {
+          if (this.status!==200&&this.status!==206) {
+            callback("");
+          }
+        }
+    };
+    xhr.send();
+}
+var  getDownloadSize=function(url, callback) {
     var xhr = new XMLHttpRequest();
     xhr.open("HEAD", url, true); // Notice "HEAD" instead of "GET", //  to get only the header
     xhr.onreadystatechange = function() {
@@ -6317,14 +6332,26 @@ var  get_downloadsize=function(url, callback) {
     };
     xhr.send();
 };
-
+var checkUpdate=function(url,fn,cb) {
+    get_date(url,function(d){
+      API.fs.root.getFile(fn, {create: false, exclusive: false}, function(fileEntry) {
+          fileEntry.getMetadata(function(metadata){
+            var localDate=Date.parse(metadata.modificationTime);
+            var urlDate=Date.parse(d);
+            cb(urlDate>localDate);
+          });
+    },function(){//error
+      cb(false); //missing local file
+    });
+  });
+}
 var download=function(url,fn,cb,statuscb,context) {
-   var totalsize=0,batches=null;;
+   var totalsize=0,batches=null,written=0;
    var createBatches=function(size) {
       var bytes=1024*1024, out=[];
       var b=Math.floor(size / bytes);
       var last=size %bytes;
-      for (var i=0;i<b;i++) {
+      for (var i=0;i<=b;i++) {
         out.push(i*bytes);
       }
       out.push(b*bytes+last);
@@ -6342,8 +6369,8 @@ var download=function(url,fn,cb,statuscb,context) {
    var tempfn="temp.kdb";
     var batch=function(b) {
        var xhr = new XMLHttpRequest();
-       
-       xhr.open('get', url, true);
+       var requesturl=url+"?"+Math.random();
+       xhr.open('get', requesturl, true);
        xhr.setRequestHeader('Range', 'bytes='+batches[b]+'-'+(batches[b+1]-1));
        xhr.responseType = 'blob';    
        var create=(b==0);
@@ -6353,6 +6380,7 @@ var download=function(url,fn,cb,statuscb,context) {
             fileEntry.createWriter(function(fileWriter) {
               fileWriter.seek(fileWriter.length);
               fileWriter.write(blob);
+              written+=blob.size;
               fileWriter.onwriteend = function(e) {
                 var abort=false;
                 if (statuscb) {
@@ -6376,7 +6404,7 @@ var download=function(url,fn,cb,statuscb,context) {
        xhr.send();
     }
      //main
-     get_downloadsize(url,function(size){
+     getDownloadSize(url,function(size){
        totalsize=size;
        if (!size) {
           if (cb) cb.apply(context,[false]);
@@ -6483,10 +6511,11 @@ var API={
   ,fstat:fstat,close:close
   ,init:init
   ,readdir:readdir
-
+  ,checkUpdate:checkUpdate
   ,rm:rm
   ,rmURL:rmURL
   ,getFileURL:getFileURL
+  ,getDownloadSize:getDownloadSize
   ,writeFile:writeFile
   ,readFile:readFile
   ,download:download
@@ -6825,15 +6854,10 @@ var close=function(kdbid) {
 	var engine=pool[kdbid];
 	if (engine) delete pool[kdbid];
 }
-var open=function(kdbid,context,cb) {
-	if (typeof context=="function") {
-		cb=context;
+var open=function(kdbid,cb,context) {
+	if (typeof io=="undefined") { //for offline mode
+		return openLocal(kdbid,cb,context);
 	}
-
-	if (!kdbid) {
-		cb(null);
-		return null;
-	};
 
 	var engine=pool[kdbid];
 	if (engine) {
@@ -6895,13 +6919,17 @@ var openLocalNode=function(kdbid,cb,context) {
 
 var openLocalHtml5=function(kdbid,cb,context) {
 	var Kdb=Require('ksana-document').kdb;
+	
+
 	var engine=localPool[kdbid];
 	if (engine) {
 		if (cb) cb(engine);
 		return engine;
 	}
 	var Kdb=Require('ksana-document').kdb;
-	new Kdb(kdbid,function(handle){
+	var kdbfn=kdbid;
+	if (kdbfn.indexOf(".kdb")==-1) kdbfn+=".kdb";
+	new Kdb(kdbfn,function(handle){
 		createLocalEngine(handle,function(engine){
 			localPool[kdbid]=engine;
 			cb.apply(engine.context,[engine]);
@@ -8016,7 +8044,7 @@ var resultlist=function(engine,Q,opts,cb) {
 					hl.text=pages[i];
 					hl.hits=hitInRange(Q,startvpos,endvpos);
 				} else {
-					var o={text:pages[i],startvpos:startvpos, endvpos: endvpos, Q:Q};
+					var o={text:pages[i],startvpos:startvpos, endvpos: endvpos, Q:Q,fulltext:opts.fulltext};
 					hl=highlight(Q,o);
 				}
 				output[i].text=hl.text;
@@ -8094,7 +8122,8 @@ var injectTag=function(Q,opts){
 var highlight=function(Q,opts) {
 	if (!opts.text) return {text:"",hits:[]};
 	var opt={text:opts.text,
-		hits:null,tag:'hl',abridge:opts.abridge,voff:opts.startvpos
+		hits:null,tag:'hl',abridge:opts.abridge,voff:opts.startvpos,
+		fulltext:opts.fulltext
 	};
 
 	opt.hits=hitInRange(opts.Q,opts.startvpos,opts.endvpos);
@@ -13060,7 +13089,7 @@ require.register("cbeta2014-main/index.js", function(exports, require, module){
 
      對讀。   
 
-*/ 
+*/  
 var require_kdb=[{ 
   filename:"cbeta.kdb"  , url:"http://ya.ksana.tw/kdb/cbeta.kdb" , desc:"cbeta"
 }];  
@@ -13239,6 +13268,9 @@ module.exports=maintext;
 });
 require.register("ksanaforge-fileinstaller/index.js", function(exports, require, module){
 /** @jsx React.DOM */
+
+/* todo , optional kdb */
+
 var htmlfs=Require("htmlfs");    
 var checkbrowser=Require("checkbrowser");  
 
@@ -13247,13 +13279,25 @@ var filelist = React.createClass({displayName: 'filelist',
 	getInitialState:function() {
 		return {downloading:false,progress:0};
 	},
+	updatable:function(f) {
+        	var classes="btn btn-warning";
+        	if (this.state.downloading) classes+=" disabled";
+		if (f.hasUpdate) return React.DOM.button( {className:classes, 
+			'data-filename':f.filename,  'data-url':f.url,
+	            onClick:this.download}
+	       , "Update")
+		else return null;
+	},
 	showLocal:function(f) {
         var classes="btn btn-danger";
         if (this.state.downloading) classes+=" disabled";
 	  return React.DOM.tr(null, React.DOM.td(null, f.filename),
 	      React.DOM.td(null),
-	      React.DOM.td(null, React.DOM.button( {className:classes, 
-	               onClick:this.deleteFile, 'data-url':f.url}, "Delete"))
+	      React.DOM.td( {className:"pull-right"}, 
+	      this.updatable(f),React.DOM.button( {className:classes, 
+	               onClick:this.deleteFile, 'data-filename':f.filename}, "Delete")
+	        
+	      )
 	  )
 	},  
 	showRemote:function(f) { 
@@ -13294,13 +13338,9 @@ var filelist = React.createClass({displayName: 'filelist',
 			}
 		,this);
 	},
-	openFile:function(e) {
-		var url=e.target.attributes["data-url"].value;
-		this.props.action("open",url);
-	},
 	deleteFile:function( e) {
-		var url=e.target.attributes["data-url"].value;
-		this.props.action("delete",url);
+		var filename=e.target.attributes["data-filename"].value;
+		this.props.action("delete",filename);
 	},
 	allFilesReady:function(e) {
 		return this.props.files.every(function(f){ return f.ready});
@@ -13336,25 +13376,31 @@ var filelist = React.createClass({displayName: 'filelist',
 	      		
 	      }
 	},
+	showUsage:function() {
+		var percent=this.props.remainPercent;
+           return (React.DOM.div(null, React.DOM.span( {className:"pull-left"}, "Usage:"),React.DOM.div( {className:"progress"}, 
+		  React.DOM.div( {className:"progress-bar progress-bar-success progress-bar-striped", role:"progressbar",  style:{width: percent+"%"}}, 
+		    	percent+"%"
+		  )
+		)));
+	},
 	render:function() {
 	  	return (
 		React.DOM.div( {ref:"dialog1", className:"modal fade", 'data-backdrop':"static"}, 
 		    React.DOM.div( {className:"modal-dialog"}, 
 		      React.DOM.div( {className:"modal-content"}, 
 		        React.DOM.div( {className:"modal-header"}, 
-		          React.DOM.h4( {className:"modal-title"}, "Install Required File")
+		          React.DOM.h4( {className:"modal-title"}, "File Installer")
 		        ),
 		        React.DOM.div( {className:"modal-body"}, 
 		        	React.DOM.table( {className:"table"}, 
-		        	React.DOM.thead(null, 
-		        	React.DOM.tr(null, React.DOM.td(null, "Filename"),React.DOM.td(null))
-		        	),
 		        	React.DOM.tbody(null, 
 		          	this.props.files.map(this.showFile)
 		          	)
 		          )
 		        ),
 		        React.DOM.div( {className:"modal-footer"}, 
+		        	this.showUsage(),
 		           this.showProgress()
 		        )
 		      )
@@ -13370,7 +13416,8 @@ var filelist = React.createClass({displayName: 'filelist',
 var filemanager = React.createClass({displayName: 'filemanager',
 	getInitialState:function() {
 		var quota=this.getQuota();
-		return {browserReady:false,requestQuota:quota};
+		return {browserReady:false,noupdate:true,
+			requestQuota:quota,remain:0};
 	},
 	getQuota:function() {
 		var q=this.props.quota||"128M";
@@ -13389,11 +13436,15 @@ var filemanager = React.createClass({displayName: 'filemanager',
 		},this);
 		return missing;
 	},
-
+	getRemoteUrl:function(fn) {
+		var f=this.props.needed.find(function(f){return f.filename==fn});
+		if (f) return f.url;
+	},
 	genFileList:function(existing,missing){
 		var out=[];
 		for (var i in existing) {
-			out.push({filename:existing[i][0], url :existing[i][0], ready:true });
+			var url=this.getRemoteUrl(existing[i][0]);
+			out.push({filename:existing[i][0], url :url, ready:true });
 		}
 		for (var i in missing) {
 			out.push(missing[i]);
@@ -13411,33 +13462,87 @@ var filemanager = React.createClass({displayName: 'filemanager',
 	  },this);
 	},
 	onQuoteOk:function(quota,usage) {
-		var missing=this.missingKdb();
-		var autoclose=this.props.autoclose||missing.length;
-		var files=this.genFileList(html5fs.files,missing);
-		this.setState({autoclose:autoclose,quota:quota,usage:usage,files:files,missing:missing});
+		var files=this.genFileList(html5fs.files,this.missingKdb());
+		var that=this;
+		that.checkIfUpdate(files,function(hasupdate) {
+			var missing=this.missingKdb();
+			var autoclose=this.props.autoclose;
+			if (missing.length) autoclose=false;
+			that.setState({autoclose:autoclose,
+				quota:quota,usage:usage,files:files,
+				missing:missing,
+				noupdate:!hasupdate,
+				remain:quota-usage});
+		});
 	},  
 	onBrowserOk:function() {
-	  this.setState({browserReady:true});  
+	  this.totalDownloadSize();
 	}, 
 	dismiss:function() {
-		this.props.onReady(this.state.usage,this.state.quota);
+		this.props.onReady(this.state.usage,this.state.quota);	
+		setTimeout(function(){
+			$(".modal.in").modal('hide');
+		},500);
+	}, 
+	totalDownloadSize:function() {
+		var files=this.missingKdb();
+		var taskqueue=[],totalsize=0;
+		for (var i=0;i<files.length;i++) {
+			taskqueue.push(
+				(function(idx){
+					return (function(data){
+						if (!(typeof data=='object' && data.__empty)) totalsize+=data;
+						html5fs.getDownloadSize(files[idx].url,taskqueue.shift());
+					});
+				})(i)
+			);
+		}
+		var that=this;
+		taskqueue.push(function(data){	
+			totalsize+=data;
+			setTimeout(function(){that.setState({requireSpace:totalsize,browserReady:true})},0);
+		});
+		taskqueue.shift()({__empty:true});
+	},
+	checkIfUpdate:function(files,cb) {
+		var taskqueue=[];
+		for (var i=0;i<files.length;i++) {
+			taskqueue.push(
+				(function(idx){
+					return (function(data){
+						if (!(typeof data=='object' && data.__empty)) files[idx-1].hasUpdate=data;
+						html5fs.checkUpdate(files[idx].url,files[idx].filename,taskqueue.shift());
+					});
+				})(i)
+			);
+		}
+		var that=this;
+		taskqueue.push(function(data){	
+			files[files.length-1].hasUpdate=data;
+			var hasupdate=files.some(function(f){return f.hasUpdate});
+			if (cb) cb.apply(that,[hasupdate]);
+		});
+		taskqueue.shift()({__empty:true});
 	},
 	render:function(){
     		if (!this.state.browserReady) {   
       			return checkbrowser( {feature:"fs", onReady:this.onBrowserOk})
-    		} if (!this.state.quota) {  
-    			//TODO , show dialog to increase quota, remaining disk space not enough
-      			return htmlfs( {quota:this.state.requestQuota, autoclose:"true", onReady:this.onQuoteOk})
+    		} if (!this.state.quota || this.state.remain<this.state.requireSpace) {  
+    			var quota=this.state.requestQuota;
+    			if (this.state.usage+this.state.requireSpace>quota) {
+    				quota=(this.state.usage+this.state.requireSpace)*1.5;
+    			}
+      			return htmlfs( {quota:quota, autoclose:"true", onReady:this.onQuoteOk})
       		} else {
-			if (this.state.missing.length==0 && this.state.autoclose) {
-				setTimeout( this.dismiss ,0);
-				return React.DOM.span(null)
+			if (!this.state.noupdate || this.missingKdb().length || !this.state.autoclose) {
+				var remain=Math.round((this.state.usage/this.state.quota)*100);				
+				return filelist( {action:this.action, files:this.state.files, remainPercent:remain})
 			} else {
-				return filelist( {action:this.action, files:this.state.files})
-			}      			
+				setTimeout( this.dismiss ,0);
+				return React.DOM.span(null);
+			}
       		}
 	},
-
 	action:function() {
 	  var args = Array.prototype.slice.call(arguments);
 	  var type=args.shift();
@@ -13526,7 +13631,7 @@ require.register("ksanaforge-htmlfs/index.js", function(exports, require, module
 /** @jsx React.DOM */
 var html5fs=Require("ksana-document").html5fs;
 var htmlfs = React.createClass({displayName: 'htmlfs',
-	getInitialState:function() {
+	getInitialState:function() { 
 		return {ready:false, quota:0,usage:0,Initialized:false,autoclose:this.props.autoclose};
 	},
 	initFilesystem:function() {
