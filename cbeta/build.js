@@ -13145,11 +13145,10 @@ var main = React.createClass({displayName: 'main',
     }
   }, 
   onReady:function(usage,quota) {
-    this.setState({quota:quota,usage:usage});
-    if (!this.state.db) Kde.openLocal("cbeta.kdb",function(db){
+    if (!this.state.db) Kde.open("cbeta",function(db){
         this.setState({db:db});  
     },this);      
-    this.setState({dialog:false});
+    this.setState({dialog:false,quota:quota,usage:usage});
   },
   openFileinstaller:function(autoclose) {
     return fileinstaller( {quota:"512M", autoclose:autoclose, needed:require_kdb, 
@@ -13479,7 +13478,7 @@ var filemanager = React.createClass({displayName: 'filemanager',
 	  this.totalDownloadSize();
 	}, 
 	dismiss:function() {
-		this.props.onReady(this.state.usage,this.state.quota);	
+		this.props.onReady(this.state.usage,this.state.quota);
 		setTimeout(function(){
 			$(".modal.in").modal('hide');
 		},500);
@@ -13539,7 +13538,7 @@ var filemanager = React.createClass({displayName: 'filemanager',
 				return filelist( {action:this.action, files:this.state.files, remainPercent:remain})
 			} else {
 				setTimeout( this.dismiss ,0);
-				return React.DOM.span(null);
+				return React.DOM.span(null, "Success");
 			}
       		}
 	},
@@ -13652,7 +13651,6 @@ var htmlfs = React.createClass({displayName: 'htmlfs',
 		          React.DOM.h4( {className:"modal-title"}, "Welcome")
 		        ),
 		        React.DOM.div( {className:"modal-body"}, 
-		          this.props.welcome?welcome():"welcome message",
 		          "Browser will ask for your confirmation."
 		        ),
 		        React.DOM.div( {className:"modal-footer"}, 
