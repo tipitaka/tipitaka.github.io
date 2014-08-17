@@ -13701,7 +13701,7 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
       this.buildtoc();
       this.setState({tocReady:true});
     }
-  }, 
+  },   
   setCurrent:function(n) {
     n=parseInt(n);
     this.setState({cur:n});
@@ -13710,7 +13710,7 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
     if (!this.props.data || !this.props.data.length) return React.DOM.div(null)
     var depth=this.props.data[this.state.cur].depth+1;
     return (
-      React.DOM.div(null,  
+      React.DOM.div( {className:"stacktoc"},  
         Ancestors( {setCurrent:this.setCurrent, toc:this.props.data, data:this.enumAncestors()}),
         React.DOM.div( {className:"node current", n:this.state.cur}, React.DOM.span(null, depth,"."),this.props.data[this.state.cur].text),
         Children( {setCurrent:this.setCurrent, toc:this.props.data, data:this.enumChildren()})
