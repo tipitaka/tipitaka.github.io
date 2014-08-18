@@ -7121,8 +7121,8 @@ td.visible-print {
 
 
 .main {}
-hl {color:red;}
-hl[n="0"] {color:blue;}
+hl {background:lightgreen}
+hl[n="0"] {background:pink}
 .row {
     width:99.99%;
 }
@@ -7130,12 +7130,17 @@ hl[n="0"] {color:blue;}
    padding: 0 !important;
    margin: 0 !important;
 }
+
+.sourcepage:hover {text-decoration:underline;color:blue;cursor: pointer}
 .comp1 {}
 .stacktoc {font-size:150%;}
 
 div.parent{background:#FFFFCC; }
-div.parent:hover { background:#FFF380; text-decoration:underline;cursor:pointer;}
-div.current {color:black; background:#59E817;border-bottom-right-radius:10px 10px;}
-div.current:hover{background:#85BB65;text-decoration: none;text-decoration:underline;cursor:pointer;}
-div.child span:hover {text-decoration:underline;cursor:pointer;}
+div.parent:hover { background:#FFF380;}
+div.parent span.text:hover { text-decoration: underline; cursor:pointer;}
+div.current {color:black; background:#85BB65;border-bottom-right-radius:10px 10px;}
+div.current:hover {background:#59E817;}
+div.current span.text:hover{text-decoration:underline;cursor:pointer;}
+div.child span.text:hover {text-decoration:underline;cursor:pointer;color:#85BB65;}
+.badge:hover {color:#59E817;cursor:pointer;}
 #main {}

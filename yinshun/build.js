@@ -4327,7 +4327,7 @@ var processTags=function(captureTags,tags,texts) {
 	for (var i=0;i<tags.length;i++) {
 
 		for (var j=0;j<tags[i].length;j++) {
-			var T=tags[i][j],tagname=T[1],tagoffset=T[0],attributes=T[2];	
+			var T=tags[i][j],tagname=T[1],tagoffset=T[0],attributes=T[2],tagvpos_filestart=T[3];	
 			if (captureTags[tagname]) {
 				attr=parseAttributesString(attributes);
 				tagStack.push([tagname,tagoffset,attr,i]);
@@ -4335,7 +4335,7 @@ var processTags=function(captureTags,tags,texts) {
 			var handler=null;
 			if (tagname[0]=="/") {
 				handler=captureTags[tagname.substr(1)];
-			}
+			} 
 			if (handler) {
 				var prev=tagStack[tagStack.length-1];
 				if (tagname.substr(1)!=prev[0]) {
@@ -4344,7 +4344,7 @@ var processTags=function(captureTags,tags,texts) {
 					tagStack.pop();
 				}
 				var text=getTextBetween(prev[3],i,prev[1],tagoffset);
-				status.vpos=status.fileStartVpos+tagoffset;
+				status.vpos=status.fileStartVpos+tagvpos_filestart;
 				status.tagStack=tagStack;
 				var fields=handler(text, tagname, attr, status);
 				
@@ -8146,14 +8146,16 @@ var getFileWithHits=function(engine,Q,range) {
 		}
 	}
 
-	var fileWithHits=[];
+	var fileWithHits=[],totalhit=0;
+	range.maxhit=range.maxhit||1000;
+
 	for (var i=start;i<Q.byFile.length;i++) {
 		if(Q.byFile[i].length>0) {
+			totalhit+=Q.byFile[i].length;
 			fileWithHits.push(i);
 			range.nextFileStart=i;
-			if (fileWithHits.length>=filecount) {
-				break;
-			}
+			if (fileWithHits.length>=filecount) break;
+			if (totalhit>range.maxhit) break;
 		}
 	}
 	if (i>=Q.byFile.length) { //no more file
@@ -12443,7 +12445,8 @@ var parseUnit=function(unittext,unitstart) {
 			tag=m1.substr(0,i);
 			attributes=m1.substr(i+1);
 		}
-		tags.push([unitstart+off-totaltaglength , tag,attributes]);
+		var tagoffset=off-totaltaglength;
+		tags.push([tagoffset , tag,attributes, unitstart+tagoffset]);
 		totaltaglength+=m.length;
 		return ""; //remove the tag from inscription
 	});
@@ -13463,7 +13466,7 @@ require.register("yinshun-main/index.js", function(exports, require, module){
 var require_kdb=[{ 
   filename:"yinshun.kdb"  , url:"http://ya.ksana.tw/kdb/yinshun.kdb" , desc:"yinshun"
 }];   
-var bootstrap=Require("bootstrap"); 
+var bootstrap=Require("bootstrap");  
 var fileinstaller=Require("fileinstaller");
 var Kde=Require('ksana-document').kde;  // Ksana Database Engine
 var Kse=Require('ksana-document').kse; // Ksana Search Engine (run at client side)
@@ -13472,9 +13475,8 @@ var resultlist=React.createClass({displayName: 'resultlist',  //should search re
   show:function() {  
     return this.props.res.excerpt.map(function(r,i){ // excerpt is an array 
       return React.DOM.div(null, 
-      React.DOM.hr(null),
-      React.DOM.div(null, r.pagename),
-      React.DOM.div( {dangerouslySetInnerHTML:{__html:r.text}})
+      React.DOM.span( {className:"sourcepage"}, r.pagename),")",
+      React.DOM.span( {dangerouslySetInnerHTML:{__html:r.text}})
       )
     })
   },
@@ -13489,12 +13491,13 @@ var main = React.createClass({displayName: 'main',
 
   }, 
   getInitialState: function() {
-    return {res:{},db:null };
+    return {res:{},db:null};
   },
-  dosearch:function() {
+  dosearch:function(e,rid,start) {
+    var start=start||0;
     var t=new Date();
     var tofind=this.refs.tofind.getDOMNode().value; // get tofind
-    Kse.search(this.state.db,tofind,{range:{start:0,maxhit:20}},function(data){ //call search engine
+    Kse.search(this.state.db,tofind,{range:{start:start,maxhit:20}},function(data){ //call search engine
       this.setState({res:data,elapse:(new Date()-t)+"ms"});
       //console.log(data) ; // watch the result from search engine
     });
@@ -13509,7 +13512,7 @@ var main = React.createClass({displayName: 'main',
         React.DOM.div(null, React.DOM.input( {onKeyPress:this.keypress, ref:"tofind", defaultValue:"無常"}),
         React.DOM.button( {ref:"btnsearch", onClick:this.dosearch}, "GO")
         )
-        )          
+        ) 
     } else {
       return React.DOM.span(null, "loading database....")
     }
@@ -13545,6 +13548,10 @@ var main = React.createClass({displayName: 'main',
   fidialog:function() {
       this.setState({dialog:true});
   },
+  onHitClick:function(n) {
+    var voff=this.state.toc[n].voff;
+    this.dosearch(null,null,voff);
+  },
   render: function() {  //main render routine
     if (!this.state.quota) { // install required db
         return this.openFileinstaller(true);
@@ -13552,14 +13559,16 @@ var main = React.createClass({displayName: 'main',
     return (
       React.DOM.div(null, 
         this.state.dialog?this.openFileinstaller():null,
-        React.DOM.div( {className:"col-md-3"},    "   ",   this.renderinputs(),
-          stacktoc( {hits:this.state.res.rawresult, data:this.state.toc})),
+        React.DOM.div( {className:"col-md-3"}, 
+          stacktoc( {onHitClick:this.onHitClick, hits:this.state.res.rawresult, data:this.state.toc})),
           React.DOM.div( {className:"col-md-4"}, 
-          React.DOM.button( {onClick:this.fidialog}, "file installer"),
-          React.DOM.span(null, this.state.elapse),    
+          
+          React.DOM.span(null, this.state.elapse),
+            this.renderinputs(),
             resultlist( {res:this.state.res})
           ),
           React.DOM.div( {className:"col-md-5"}, 
+          React.DOM.button( {onClick:this.fidialog}, "file installer"),
           "text"
           )
 
@@ -13590,36 +13599,58 @@ module.exports=comp1;
 });
 require.register("ksanaforge-stacktoc/index.js", function(exports, require, module){
 /** @jsx React.DOM */
+
+var trimHit=function(hit) {
+  if (hit>999) {
+    return (Math.floor(hit/1000)).toString()+"K+";
+  } else return hit.toString();
+}
 var Ancestors=React.createClass({displayName: 'Ancestors',
   goback:function(e) {
     var n=e.target.dataset["n"]; 
     if (typeof n=="undefined") n=e.target.parentNode.dataset["n"];
     this.props.setCurrent(n); 
   },
+  showExcerpt:function(e) {
+    var n=parseInt(e.target.parentNode.dataset["n"]);
+    e.stopPropagation();
+    e.preventDefault();
+    this.props.hitClick(n);
+  }, 
   showHit:function(hit) {
-    if (hit)  return React.DOM.span( {className:"pull-right badge"}, hit)
+    if (hit)  return React.DOM.span( {onClick:this.showExcerpt, className:"pull-right badge"}, hit)
     else return React.DOM.span(null);
   },
   renderAncestor:function(n,idx) {
     var hit=this.props.toc[n].hit;
-    return React.DOM.div( {key:"a"+n, onClick:this.goback, className:"node parent", 'data-n':n}, idx+1,".",React.DOM.span(null, this.props.toc[n].text),this.showHit(hit))
+    return React.DOM.div( {key:"a"+n, className:"node parent", 'data-n':n}, idx+1,".",React.DOM.span( {className:"text", onClick:this.goback} , this.props.toc[n].text),this.showHit(hit))
   },
   render:function() {
     if (!this.props.data || !this.props.data.length) return React.DOM.div(null);
     return React.DOM.div(null, this.props.data.map(this.renderAncestor))
-  }
-});
+  } 
+}); 
 var Children=React.createClass({displayName: 'Children',
   open:function(e) {
     var n=e.target.parentNode.dataset["n"];
     if (typeof n!=="undefined") this.props.setCurrent(n);
   }, 
   showHit:function(hit) {
-    if (hit)  return React.DOM.span( {className:"pull-right badge"}, hit)
+    if (hit)  return React.DOM.span( {onClick:this.showExcerpt, className:"pull-right badge"}, hit)
     else return React.DOM.span(null);
   },
-  openNode:function() {
-    return React.DOM.button( {className:"btn btn-xs btn-success", onClick:this.open}, "...")
+  showExcerpt:function(e) {
+    var n=parseInt(e.target.parentNode.dataset["n"]);
+    e.stopPropagation();
+    e.preventDefault();
+    this.props.hitClick(n);
+  }, 
+  openNode:function(haschild) {
+    if (haschild) {
+      return React.DOM.button( {className:"btn btn-xs btn-success", onClick:this.open}, "＋")
+    } else {
+      return React.DOM.button( {className:"btn btn-xs btn-default disabled"}, "－")
+    }    
   },
   renderChild:function(n) {
     var child=this.props.toc[n];
@@ -13628,10 +13659,11 @@ var Children=React.createClass({displayName: 'Children',
     //if (child.extra) extra="<extra>"+child.extra+"</extra>";
     if (!child.hasChild) classes+=" nochild";
     else haschild=true;
-
+     
     return React.DOM.div( {className:classes, 'data-n':n},  
-    React.DOM.span( {onClick:this.go}, this.props.toc[n].text),haschild?this.openNode():"",this.showHit(hit))
-  },
+    this.openNode(haschild),
+    React.DOM.span( {className:"text",  onClick:this.go}, this.props.toc[n].text),this.showHit(hit))
+  }, 
   go:function(e) {
     var n=e.target.parentNode.dataset["n"];
 
@@ -13747,7 +13779,6 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
       }
     }
     nodeIds.forEach(function(n){getRange(n)});
-
     nodeIds.forEach(function(n){getHit(n)});
   },
   fillHits:function(ancestors,children) {
@@ -13755,8 +13786,18 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
       this.fillHit(children);
       this.fillHit(this.state.cur);
   },
+  hitClick:function(n) {
+    if (this.props.onHitClick) {
+      this.props.onHitClick(n);
+    }
+  },
+  onHitClick:function(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    this.hitClick(this.state.cur);
+  },
   showHit:function(hit) {
-    if (hit)  return React.DOM.span( {className:"pull-right badge"}, hit)
+    if (hit)  return React.DOM.span( {onClick:this.onHitClick, className:"pull-right badge"}, hit)
     else return React.DOM.span(null);
   },
   render: function() {
@@ -13768,9 +13809,9 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
     if (this.props.hits && this.props.hits.length) this.fillHits(ancestors,children);
     return (
       React.DOM.div( {className:"stacktoc"},  
-        Ancestors( {setCurrent:this.setCurrent, toc:this.props.data, data:ancestors}),
-        React.DOM.div( {className:"node current", n:this.state.cur}, React.DOM.span(null, depth,"."),current.text,this.showHit(current.hit)),
-        Children( {setCurrent:this.setCurrent, toc:this.props.data, data:children})
+        Ancestors( {hitClick:this.hitClick, setCurrent:this.setCurrent, toc:this.props.data, data:ancestors}),
+        React.DOM.div( {className:"node current", n:this.state.cur}, React.DOM.span(null, depth,"."),React.DOM.span( {className:"text"}, current.text),this.showHit(current.hit)),
+        Children( {hitClick:this.hitClick, setCurrent:this.setCurrent, toc:this.props.data, data:children})
       )
     ); 
   }
