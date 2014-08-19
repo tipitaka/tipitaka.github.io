@@ -13712,6 +13712,7 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
       var toc=this.props.data;
       if (!toc || !toc.length) return;
       var cur=this.state.cur;
+      if (cur==0) return [];
       var n=cur-1;
       var depth=toc[cur].depth - 1;
       var parents=[];
