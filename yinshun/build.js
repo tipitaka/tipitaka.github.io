@@ -13686,10 +13686,10 @@ var Children=React.createClass({displayName: 'Children',
     if (!this.props.data || !this.props.data.length) return React.DOM.div(null);
     return React.DOM.div(null, this.props.data.map(this.renderChild))
   }
-});
+}); 
 var stacktoc = React.createClass({displayName: 'stacktoc',
   getInitialState: function() {
-    return {bar: "world",tocReady:false,cur:1809};//403
+    return {bar: "world",tocReady:false,cur:0};//403
   },
   buildtoc: function() {
       var toc=this.props.data;
