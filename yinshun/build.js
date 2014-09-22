@@ -2248,6 +2248,7 @@ require.register("ksana-document/index.js", function(exports, require, module){
 	,html5fs:require("./html5fs")
 	,plist:require("./plist")
 	,bsearch:require("./bsearch")
+	,persistentmarkup:require("./persistentmarkup_pouchdb")
 }
 if (typeof process!="undefined") {
 	API.persistent=require('./persistent');
@@ -2675,7 +2676,7 @@ var mergeMarkup = function(markups,offsets,type) {
 
 var strikeout=function(start,length,user,type) {
 	this.clearMarkups(start,length,user);
-	markups=this.__markups__();
+	var markups=this.__markups__();
 	var M=require("./markup");
 	type=type||"suggest";
 	return M.strikeout(markups,start,length,user,type);
@@ -2741,7 +2742,12 @@ var newPage = function(opts) {
 			} else {
 			*/
 				var mu=this.getMutant(0); //revert from Mutant
-				inscription=checkLength(applyChanges(mu.inscription,mu.revert));				
+				if (mu) {
+					inscription=checkLength(applyChanges(mu.inscription,mu.revert));					
+				} else {
+					inscription="";
+				}
+				
 			//}
 			hasInscription=true;
 			return inscription;
@@ -4290,14 +4296,16 @@ var putDocument=function(parsed,cb) {
 }
 
 var parseBody=function(body,sep,cb) {
-	var res=xml4kdb.parseXML(body, {sep:sep});
+	var res=xml4kdb.parseXML(body, {sep:sep,trim:!!session.config.trim});
 	putDocument(res,cb);
 }
 
 var pat=/([a-zA-Z:]+)="([^"]+?)"/g;
 var parseAttributesString=function(s) {
 	var out={};
-	s.replace(pat,function(m,m1,m2){out[m1]=m2});
+	//work-around for repeated attribute,
+	//take the first one
+	s.replace(pat,function(m,m1,m2){if (!out[m1]) out[m1]=m2});
 	return out;
 }
 var storeFields=function(fields,json) {
@@ -4328,35 +4336,41 @@ var storeFields=function(fields,json) {
 var tagStack=[];
 var processTags=function(captureTags,tags,texts) {
 	var getTextBetween=function(from,to,startoffset,endoffset) {
-		if (from==to) return texts[from].t.substring(startoffset,endoffset);
-		var first=texts[from].t.substr(startoffset);
+		if (from==to) return texts[from].t.substring(startoffset-1,endoffset-1);
+		var first=texts[from].t.substr(startoffset-1);
 		var middle="";
 		for (var i=from+1;i<to;i++) {
 			middle+=texts[i].t;
 		}
-		var last=texts[to].t.substr(0,endoffset);
+		var last=texts[to].t.substr(0,endoffset-1);
 		return first+middle+last;
 	}
 	for (var i=0;i<tags.length;i++) {
 
 		for (var j=0;j<tags[i].length;j++) {
 			var T=tags[i][j],tagname=T[1],tagoffset=T[0],attributes=T[2],tagvpos=T[3];	
+			var nulltag=attributes[attributes.length-1]=='/';
 			if (captureTags[tagname]) {
-				attr=parseAttributesString(attributes);
-				tagStack.push([tagname,tagoffset,attr,i]);
+				var attr=parseAttributesString(attributes);
+				if (!nulltag) tagStack.push([tagname,tagoffset,attr,i]);
 			}
 			var handler=null;
-			if (tagname[0]=="/") {
-				handler=captureTags[tagname.substr(1)];
-			} 
+			if (tagname[0]=="/") handler=captureTags[tagname.substr(1)];
+			else if (nulltag) handler=captureTags[tagname];
+
 			if (handler) {
 				var prev=tagStack[tagStack.length-1];
-				if (tagname.substr(1)!=prev[0]) {
-					console.error("tag unbalance",tagname,prev[0]);
+				if (!nulltag) {				
+					if (tagname.substr(1)!=prev[0]) {
+						console.error("tag unbalance",tagname,prev[0]);
+					} else {
+						tagStack.pop();
+					}
+					var text=getTextBetween(prev[3],i,prev[1],tagoffset);
 				} else {
-					tagStack.pop();
+					var text="";
 				}
-				var text=getTextBetween(prev[3],i,prev[1],tagoffset);
+				
 				status.vpos=tagvpos; 
 				status.tagStack=tagStack;
 				var fields=handler(text, tagname, attr, status);
@@ -4582,6 +4596,10 @@ var finalize=function(cb) {
 	console.log("optimizing");
 	var json=optimize4kdb(session.json);
 
+	if (session.config.extra) {
+		json.extra=session.config.extra;
+	}
+	
 	console.log("output to",session.kdbfn);
 	kdbw.save(json,null,{autodelete:true});
 	
@@ -4832,6 +4850,11 @@ var DT={
 	//ydb start with object signature,
 	//type a ydb in command prompt shows nothing
 }
+var verbose=0, readLog=function(){};
+var _readLog=function(readtype,bytes) {
+	console.log(readtype,bytes,"bytes");
+}
+if (verbose) readLog=_readLog;
 
 var Create=function(path,opts,cb) {
 	/* loadxxx functions move file pointer */
@@ -4975,6 +4998,7 @@ var Create=function(path,opts,cb) {
 											o[key]=data; 
 										}
 										opts.blocksize=sz;
+										if (verbose) readLog("key",key);
 										load.apply(that,[opts, taskqueue.shift()]);
 									}
 								);
@@ -5314,7 +5338,7 @@ var Open=function(path,opts,cb) {
   var decodeutf8 = function (utftext) {
         var string = "";
         var i = 0;
-        var c=0,c1 = 0, c2 = 0;
+        var c=0,c1 = 0, c2 = 0 , c3=0;
  				for (var i=0;i<utftext.length;i++) {
  					if (utftext.charCodeAt(i)>127) break;
  				}
@@ -5397,11 +5421,12 @@ var Open=function(path,opts,cb) {
 		  
 		  if (html5fs) {
 	  		readLog("stringArray",buffer.byteLength);
-			if (encoding=='utf8') {
-				out=buf2stringarr(buffer,"utf8");
-			} else { //ucs2 is 3 times faster
-				out=buf2stringarr(buffer,"ucs2");
-			}
+
+				if (encoding=='utf8') {
+					out=buf2stringarr(buffer,"utf8");
+				} else { //ucs2 is 3 times faster
+					out=buf2stringarr(buffer,"ucs2");
+				}
 		  } else {
 			readLog("stringArray",buffer.length);
 			out=buffer.toString(encoding).split('\0');
@@ -5451,6 +5476,7 @@ var Open=function(path,opts,cb) {
 		var that=this;
 		var buf=new Buffer(blocksize);
 		fs.read(this.handle,buf,0,blocksize,pos,function(err,len,buffer){
+
 			readLog("buf",len);
 			/*
 			var buff=[];
@@ -5635,7 +5661,7 @@ var pack_int = function (ar, savedelta) { // pack ar into
 		delta -= prev;
 	}
 	if (delta < 0) {
-	  console.trace('negative',prev,ar[i],ar)
+	  console.trace('negative',prev,ar[i])
 	  throw 'negetive';
 	  break;
 	}
@@ -6406,19 +6432,19 @@ extension id
 */
 
 var read=function(handle,buffer,offset,length,position,cb) {	 //buffer and offset is not used
-     var xhr = new XMLHttpRequest();
-      xhr.open('GET', handle.url , true);
-      var range=[position,length+position-1];
-      xhr.setRequestHeader('Range', 'bytes='+range[0]+'-'+range[1]);
-      xhr.responseType = 'arraybuffer';
-      xhr.send();
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', handle.url , true);
+  var range=[position,length+position-1];
+  xhr.setRequestHeader('Range', 'bytes='+range[0]+'-'+range[1]);
+  xhr.responseType = 'arraybuffer';
+  xhr.send();
 
-      xhr.onload = function(e) {
-        var that=this;
-        setTimeout(function(){
-          cb(0,that.response.byteLength,that.response);
-        },0);
-      }; 
+  xhr.onload = function(e) {
+    var that=this;
+    setTimeout(function(){
+      cb(0,that.response.byteLength,that.response);
+    },0);
+  }; 
 }
 
 var close=function(handle) {
@@ -6479,6 +6505,10 @@ var  getDownloadSize=function(url, callback) {
     xhr.send();
 };
 var checkUpdate=function(url,fn,cb) {
+    if (!url) {
+      cb(false);
+      return;
+    }
     get_date(url,function(d){
       API.fs.root.getFile(fn, {create: false, exclusive: false}, function(fileEntry) {
           fileEntry.getMetadata(function(metadata){
@@ -6774,7 +6804,7 @@ var _gets=function(keys,recursive,cb) { //get many data with one call
 	taskqueue.shift()({__empty:true}); //run the task
 }
 
-var toDoc=function(pagenames,texts,parents,reverts) {
+var toDoc=function(pagenames,texts,others) {
 	if (typeof Require!="undefined") {
 		var D=Require("ksana-document").document;
 	} else {
@@ -6782,12 +6812,13 @@ var toDoc=function(pagenames,texts,parents,reverts) {
 	}
 	var d=D.createDocument() ,revert=null;
 	for (var i=0;i<texts.length;i++) {
-		if (reverts && reverts[i].trim()) revert=JSON.parse(reverts[i]);
+		if (others.reverts && others.reverts[i].trim()) revert=JSON.parse(others.reverts[i]);
 		else revert=null;
 		var p=null;
-		if (parents) p=parents[i];
+		if (others.parents) p=others.parents[i];
 		d.createPage({n:pagenames[i],t:texts[i],p:p,r:revert});
 	}
+	if (others.markups) d.addMarkups(others.markups);
 	d.endCreatePages();
 	return d;
 }
@@ -6798,10 +6829,14 @@ var getFileRange=function(i) {
 	var pageNames=engine.get(["pageNames"]);
 	var fileStart=fileOffsets[i],fileEnd=fileOffsets[i+1];
 
-	var start=bsearch(pageOffsets,fileStart);
+	var start=bsearch(pageOffsets,fileStart+1,true);
+	if (i==0) start=0; //work around for first file
 	var end=bsearch(pageOffsets,fileEnd);
-	if (pageOffsets[start+1]==pageOffsets[start]) start++;
-	if (pageOffsets[end+1]==pageOffsets[end]) end++;
+	//in case of items with same value
+	//return the last one
+	while (start && pageOffsets[start-1]==pageOffsets[start]) start--;	
+	
+	while (pageOffsets[end+1]==pageOffsets[end]) end++;
 
 	return {start:start,end:end};
 }
@@ -6814,12 +6849,17 @@ var getFilePageOffsets=function(i) {
 var getFilePageNames=function(i) {
 	var range=getFileRange.apply(this,[i]);
 	var pageNames=this.get("pageNames");
-	return pageNames.slice(range.start,range.end);
+	return pageNames.slice(range.start,range.end+1);
 }
-var getDocument=function(filename,cb){
+var getDocument=function(filename,markups,cb){
 	var engine=this;
 	var filenames=engine.get("fileNames");
-	
+
+	if (typeof markups=="function")  { //no markups
+		cb=markups;
+		markups=null;
+	}
+
 	var i=filenames.indexOf(filename);
 	if (i==-1) {
 		cb(null);
@@ -6832,7 +6872,7 @@ var getDocument=function(filename,cb){
 				reverts=file.reverts;
 			}
 			engine.get(["fileContents",i],true,function(data){
-				cb(toDoc(pagenames,data,parentId,reverts));
+				cb(toDoc(pagenames,data,{parents:parentId,reverts:reverts,markups:markups}));
 			});			
 		});
 	}
@@ -6962,6 +7002,7 @@ var getRemote=function(key,recursive,cb) {
 	}
 }
 var pageOffset=function(pagename) {
+	var engine=this;
 	if (arguments.length>1) throw "argument : pagename ";
 
 	var pageNames=engine.get("pageNames");
@@ -7062,7 +7103,7 @@ var open=function(kdbid,cb,context) {
 
 	var engine=pool[kdbid];
 	if (engine) {
-		if (cb) cb.apply(engine.context,[engine]);
+		if (cb) cb.apply(context||engine.context,[engine]);
 		return engine;
 	}
 	engine=createEngine(kdbid,context,cb);
@@ -7101,7 +7142,7 @@ var openLocalNode=function(kdbid,cb,context) {
 			new Kdb(tries[i],function(kdb){
 				createLocalEngine(kdb,function(engine){
 						localPool[kdbid]=engine;
-						cb(engine);
+						cb.apply(context||engine.context,[engine]);
 				},context);
 			});
 			return engine;
@@ -7116,7 +7157,7 @@ var openLocalHtml5=function(kdbid,cb,context) {
 	
 	var engine=localPool[kdbid];
 	if (engine) {
-		if (cb) cb.apply(engine.context,[engine]);
+		if (cb) cb.apply(context||engine.context,[engine]);
 		return engine;
 	}
 	var Kdb=Require('ksana-document').kdb;
@@ -7125,7 +7166,7 @@ var openLocalHtml5=function(kdbid,cb,context) {
 	new Kdb(kdbfn,function(handle){
 		createLocalEngine(handle,function(engine){
 			localPool[kdbid]=engine;
-			cb.apply(engine.context,[engine]);
+			cb.apply(context||engine.context,[engine]);
 		},context);		
 	});
 }
@@ -8236,16 +8277,8 @@ var resultlist=function(engine,Q,opts,cb) {
 			} else {
 				output[i]=null; //remove item vpos less than opts.range.start
 			}
-			if (opts.range.maxhit && seq>opts.range.maxhit) {
-				while(!output[0]) {
-					output.shift();
-					i--;
-				}
-
-				output.length=i;
-				break;
-			}
-		}
+		} 
+		output=output.filter(function(o){return o!=null});
 		cb(output);
 	});
 }
@@ -12496,6 +12529,7 @@ var parseXML=function(buf, opts){
 	var texts=[], tags=[];
 	units.map(function(U,i){
 		var out=parseUnit(U[1]);
+		if (opts.trim) out.inscription=out.inscription.trim();
 		texts.push({n:U[0]||emptypagename,t:out.inscription});
 		tags.push(out.tags);
 	});
@@ -13049,6 +13083,85 @@ var bsearchNear=function(array,value) {
 }
 
 module.exports=bsearch;//{bsearchNear:bsearchNear,bsearch:bsearch};
+});
+require.register("ksana-document/persistentmarkup_pouchdb.js", function(exports, require, module){
+/*
+markup format:
+{"start":start_offset,"len":length_in_byte,"payload":{"type":"markup_type",author":"p1","text":""},"i":page_id}
+*/
+//saveMarkup({dbid:dbid,markups:markups,filename:filename,i:this.state.pageid } ,function(data){
+
+var combineMarkups=function(db,markups,fn,pageid,cb) {
+
+	var key="M!"+pageid+"!"+fn;
+	db.get(key,function(err,res){
+		var existing=[] ;
+		if (res && res.M) existing=res.M ;
+		if (!markups || !markups.length) {
+			if (err.error) cb([]);
+			else cb(existing);
+			return;
+		}
+
+		var author=markups[0].payload.author, others=[];
+		if (existing) {
+			others=existing.filter(function(m){return m.i!=pageid || m.payload.author != author});		
+		}
+		for (var i=0;i<markups.length;i++) {
+			markups[i].i=pageid;
+		}
+		others=others.concat(markups);
+		var sortfunc=function(a,b) {
+			//each page less than 64K
+			return (a.i*65536 +a.start) - (b.i*65536 +b.start);
+		}
+		others.sort(sortfunc);
+		cb(others,res._rev);
+	});
+}
+
+var saveMarkup=function(opts,cb){
+	combineMarkups(opts.db,opts.markups,opts.filename,opts.i,function(markups,rev){
+		for (var i=0;i<markups.length;i++) {
+			markups[i].i=opts.i;
+		}
+		var key="M!"+opts.i+"!"+opts.filename;
+		if (markups.length) {
+			opts.db.put({M:markups,_rev:rev,_id:key},function(err,response){
+				cb();
+			});
+		} else {
+			cb();
+		}
+	});
+}
+var __loadMarkups=function(db,fn,pagecount,cb) {
+	var out=[],keys=[];
+	for (var i=1;i<pagecount;i++) {
+		keys.push("M!"+i+"!"+fn);
+	}
+	db.allDocs({include_docs:true,keys:keys},function(err,res){
+			res.rows.map(function(r){
+				if (r.error) return;
+				out=out.concat(r.doc.M);
+			})
+			cb(out);
+	});
+}
+var loadMarkup=function(db,fn,pageid,cb) {
+	if (pageid<0) {
+		__loadMarkups(db,fn,-pageid,cb);
+		return;
+	}
+	var key="M!"+pageid+"!"+fn;
+	db.get(key,function(err,res){
+		cb(res.M);
+	});
+}
+module.exports={
+	saveMarkup:saveMarkup,
+	loadMarkup:loadMarkup
+}
 });
 require.register("ksanaforge-fileinstaller/index.js", function(exports, require, module){
 /** @jsx React.DOM */
@@ -13762,7 +13875,7 @@ var Children=React.createClass({displayName: 'Children',
   showText:function(e) {
     var n=e.target.dataset["n"];
     if (typeof n=="undefined") n=e.target.parentNode.dataset["n"];
-    this.props.showText(parseInt(n));
+    if (this.props.showText) this.props.showText(parseInt(n));
   },
   render:function() {
     if (!this.props.data || !this.props.data.length) return React.DOM.div(null);
@@ -13828,12 +13941,18 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
         if (n) child=toc[n];else break;
       }
       return children;
-    },
-  componentDidUpdate:function() {
+  },
+  rebuildToc:function() {
     if (!this.state.tocReady && this.props.data) {
       this.buildtoc();
       this.setState({tocReady:true});
     }
+  },
+  componentDidMount:function() {
+    this.rebuildToc();
+  },
+  componentDidUpdate:function() {
+    this.rebuildToc();
   },   
   setCurrent:function(n) {
     n=parseInt(n);
@@ -14029,6 +14148,7 @@ require.alias("ksana-document/tei.js", "yinshun/deps/ksana-document/tei.js");
 require.alias("ksana-document/concordance.js", "yinshun/deps/ksana-document/concordance.js");
 require.alias("ksana-document/regex.js", "yinshun/deps/ksana-document/regex.js");
 require.alias("ksana-document/bsearch.js", "yinshun/deps/ksana-document/bsearch.js");
+require.alias("ksana-document/persistentmarkup_pouchdb.js", "yinshun/deps/ksana-document/persistentmarkup_pouchdb.js");
 require.alias("ksana-document/index.js", "yinshun/deps/ksana-document/index.js");
 require.alias("ksana-document/index.js", "ksana-document/index.js");
 require.alias("ksana-document/index.js", "ksana-document/index.js");
