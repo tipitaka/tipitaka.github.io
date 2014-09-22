@@ -6838,7 +6838,7 @@ var getFileRange=function(i) {
 	
 	while (pageOffsets[end+1]==pageOffsets[end]) end++;
 
-	return {start:start,end:end};
+return {start:start-1,end:end};
 }
 var getFilePageOffsets=function(i) {
 	var pageOffsets=this.get("pageOffsets");
