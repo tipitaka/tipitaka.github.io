@@ -13699,10 +13699,23 @@ var resultlist=React.createClass({displayName: 'resultlist',  //should search re
    
 var main = React.createClass({displayName: 'main',
   componentDidMount:function() {
-
+    var that=this;
+    window.onhashchange = function () {that.goHashTag();}
+    
   }, 
   getInitialState: function() {
     return {res:{},db:null};
+  },
+  encodeHashTag:function(f,p) { //file/page to hash tag
+    var pagename=this.state.db.getFilePageNames(f)[p];
+    return "#"+f+"."+p;
+  },
+  decodeHashTag:function(s) {
+    var fp=s.match(/#(\d)+\.(.*)/);
+    this.setPage(fp[2],fp[1]);
+  },
+  goHashTag:function() {
+    this.decodeHashTag(window.location.hash);
   },
   dosearch:function() {
     var start=arguments[2]||0; //event == arguments[0], react_id==arguments[1]
@@ -13745,6 +13758,7 @@ var main = React.createClass({displayName: 'main',
           var voffs=db.get(["fields","head_voff"]);
           var toc=this.genToc(heads,depths,voffs);//,toc:toc
           this.setState({toc:toc});
+          this.goHashTag();
        });
     },this);      
     this.setState({dialog:false,quota:quota,usage:usage});
@@ -13762,13 +13776,14 @@ var main = React.createClass({displayName: 'main',
   showExcerpt:function(n) {
     var voff=this.state.toc[n].voff;
     this.dosearch(null,null,voff);
-  }, 
+  },
   showPage:function(f,p,hideResultlist) {
+    window.location.hash = this.encodeHashTag(f,p);
     kse.highlightPage(this.state.db,f,p,{q:this.state.q},function(data){
       this.setState({bodytext:data});
       if (hideResultlist) this.setState({res:[]});
     });
-  }, 
+  },
   showText:function(n) {
     var res=kse.vpos2filepage(this.state.db,this.state.toc[n].voff);
     this.showPage(res.file,res.page,true);
@@ -13786,8 +13801,8 @@ var main = React.createClass({displayName: 'main',
     if (page<0) page=0;
     this.showPage(this.state.bodytext.file,page);
   },
-  setPage:function(newpagename) {
-    var file=this.state.bodytext.file;
+  setPage:function(newpagename,file) {
+    file=file||this.state.bodytext.file; 
     var pagenames=this.state.db.getFilePageNames(file);
     var p=pagenames.indexOf(newpagename);
     if (p>-1) this.showPage(file,p);
