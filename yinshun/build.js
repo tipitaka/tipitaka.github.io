@@ -2249,6 +2249,7 @@ require.register("ksana-document/index.js", function(exports, require, module){
 	,plist:require("./plist")
 	,bsearch:require("./bsearch")
 	,persistentmarkup:require("./persistentmarkup_pouchdb")
+	,underlines:require("./underlines")
 }
 if (typeof process!="undefined") {
 	API.persistent=require('./persistent');
@@ -4836,7 +4837,12 @@ require.register("ksana-document/kdb.js", function(exports, require, module){
 
   
 */
-var Kfs=require('./kdbfs');	
+if (typeof ksanagap=="undefined") {
+	var Kfs=require('./kdbfs');		
+} else {
+	var Kfs=require("./kdbfs_ksanagap");
+}
+
 
 var DT={
 	uint8:'1', //unsigned 1 byte integer
@@ -4870,6 +4876,7 @@ var Create=function(path,opts,cb) {
 		cb=opts;
 		opts={};
 	}
+
 	
 	var loadVInt =function(opts,blocksize,count,cb) {
 		//if (count==0) return [];
@@ -5400,12 +5407,12 @@ var Open=function(path,opts,cb) {
 	var buf2stringarr=function(buf,enc) {
 		if (enc=="utf8") 	var arr=new Uint8Array(buf);
 		else var arr=new Uint16Array(buf);
-		var i=0,codes=[],out=[];
+		var i=0,codes=[],out=[],s="";
 		while (i<arr.length) {
 			if (arr[i]) {
 				codes[codes.length]=arr[i];
 			} else {
-				var s=String.fromCharCode.apply(null,codes);
+				s=String.fromCharCode.apply(null,codes);
 				if (enc=="utf8") out[out.length]=decodeutf8(s);
 				else out[out.length]=s;
 				codes=[];				
@@ -6712,6 +6719,87 @@ var API={
 
   module.exports=API;
 });
+require.register("ksana-document/kdbfs_ksanagap.js", function(exports, require, module){
+/*
+  JAVA can only return Number and String
+	array and buffer return in string format
+	need JSON.parse
+*/
+var readSignature=function(pos,cb) {
+	var signature=fs.readStringSync(this.handle,pos,1);
+	cb.apply(this,[signature]);
+}
+var readI32=function(pos,cb) {
+	var i32=fs.readI32Sync(this.handle,pos);
+	cb.apply(this,[i32]);	
+}
+var readUI32=function(pos,cb) {
+	var ui32=fs.readUI32Sync(this.handle,pos);
+	cb.apply(this,[ui32]);
+}
+var readUI8=function(pos,cb) {
+	var ui8=fs.readUI8Sync(this.handle,pos);
+	cb.apply(this,[ui8]);
+}
+var readBuf=function(pos,blocksize,cb) {
+	var buf=fs.readBufSync(this.handle,pos,blocksize);
+	var buff=JSON.parse(buf);
+	cb.apply(this,[buff]);	
+}
+
+var readBuf_packedint=function(pos,blocksize,cb) {
+	var buf=fs.readPackedIntSync(this.handle,pos,blocksize);
+	var buff=JSON.parse(buf);
+	cb.apply(this,[buff]);	
+}
+var readString= function(pos,blocksize,encoding,cb) {
+	var str=fs.readEncodedStringSync(this.handle,pos,blocksize,encoding);
+	cb.apply(this,[str]);	
+}
+
+var readFixedArray = function(pos ,count, unitsize,cb) {
+	var buf=fs.readFixedArraySync(this.handle,pos,count,unitsize);
+	var buff=JSON.parse(buf);
+	cb.apply(this,[buff]);	
+}
+var readStringArray = function(pos,blocksize,encoding,cb) {
+	var buf=fs.readStringArraySync(this.handle,pos,count,unitsize);
+	var buff=JSON.parse(buf);
+	cb.apply(this,[buff]);	
+}
+
+var Open=function(path,opts,cb) {
+	opts=opts||{};
+	var signature_size=1;
+	var setupapi=function() {
+		console.log("setup api");
+		this.readSignature=readSignature;
+		this.readI32=readI32;
+		this.readUI32=readUI32;
+		this.readUI8=readUI8;
+		this.readBuf=readBuf;
+		this.readBuf_packedint=readBuf_packedint;
+		this.readFixedArray=readFixedArray;
+		this.readString=readString;
+		this.readStringArray=readStringArray;
+		this.signature_size=signature_size;
+		this.free=free;
+		this.size=fs.getFileSize(this.handle);
+		console.log("filesize "+this.size);
+		if (cb)	cb.call(this);
+	}
+	var free=function() {
+		//console.log('closing ',handle);
+		fs.closeSync(this.handle);
+	}
+	console.log("opening2"+path);	
+	this.handle=fs.openSync(path);
+	this.opened=true;
+	setupapi();
+}
+
+module.exports=Open;
+});
 require.register("ksana-document/kse.js", function(exports, require, module){
 /*
   Ksana Search Engine.
@@ -7143,19 +7231,8 @@ var open=function(kdbid,cb,context) {
 	pool[kdbid]=engine;
 	return engine;
 }
-var openLocalNode=function(kdbid,cb,context) {
-	var fs=nodeRequire('fs');
-	var Kdb=nodeRequire('ksana-document').kdb;
-	var engine=localPool[kdbid];
-	if (engine) {
-		if (cb) cb(engine);
-		return engine;
-	}
-
-	var kdbfn=kdbid;
-	if (kdbfn.indexOf(".kdb")==-1) kdbfn+=".kdb";
-
-	var tries=["./"+kdbfn  //TODO , allow any depth
+var getLocalTries=function(kdbfn) {
+	return ["./"+kdbfn  //TODO , allow any depth
 	           ,apppath+"/"+kdbfn,
 	           ,apppath+"/ksana_databases/"+kdbfn
 	           ,apppath+"/"+kdbfn,
@@ -7167,6 +7244,51 @@ var openLocalNode=function(kdbid,cb,context) {
 	           ,"../../../"+kdbfn
 	           ,"../../../ksana_databases/"+kdbfn
 	           ];
+}
+var openLocalKsanagap=function(kdbid,cb,context) {
+	console.log("open local ksanagap");
+	var engine=localPool[kdbid];
+	if (engine) {
+		if (cb) cb(engine);
+		return engine;
+	}
+	console.log("open local ksanagap2.5");
+
+	var Kdb=Require('ksana-document').kdb;
+	var kdbfn=kdbid;
+	if (kdbfn.indexOf(".kdb")==-1) kdbfn+=".kdb";
+
+	var tries=getLocalTries(kdbfn);
+
+	for (var i=0;i<tries.length;i++) {
+		if (fs.existsSync(tries[i])) {
+			//console.log("kdb path: "+nodeRequire('path').resolve(tries[i]));
+			new Kdb(tries[i],function(kdb){
+				createLocalEngine(kdb,function(engine){
+						localPool[kdbid]=engine;
+						cb.apply(context||engine.context,[engine]);
+				},context);
+			});
+			return engine;
+		}
+	}
+	if (cb) cb(null);
+	return null;
+
+}
+var openLocalNode=function(kdbid,cb,context) {
+	var fs=nodeRequire('fs');
+	var engine=localPool[kdbid];
+	if (engine) {
+		if (cb) cb(engine);
+		return engine;
+	}
+
+	var Kdb=nodeRequire('ksana-document').kdb;
+	var kdbfn=kdbid;
+	if (kdbfn.indexOf(".kdb")==-1) kdbfn+=".kdb";
+
+	var tries=getLocalTries(kdbfn);
 
 	for (var i=0;i<tries.length;i++) {
 		if (fs.existsSync(tries[i])) {
@@ -7204,10 +7326,14 @@ var openLocalHtml5=function(kdbid,cb,context) {
 }
 //omit cb for syncronize open
 var openLocal=function(kdbid,cb,context)  {
-	if (kdbid.indexOf("filesystem:")>-1 || typeof process=="undefined") {
-		openLocalHtml5(kdbid,cb,context);
+	if (typeof ksanagap=="undefined") {
+		if (kdbid.indexOf("filesystem:")>-1 || typeof process=="undefined") {
+			openLocalHtml5(kdbid,cb,context);
+		} else {
+			openLocalNode(kdbid,cb,context);
+		}		
 	} else {
-		openLocalNode(kdbid,cb,context);
+		openLocalKsanagap(kdbid,cb,context);
 	}
 }
 var setPath=function(path) {
@@ -8269,7 +8395,9 @@ var resultlist=function(engine,Q,opts,cb) {
 		var pageNames=engine.getFilePageNames(nfile);
 		files[nfile]={pageOffsets:pageOffsets};
 		var pagewithhit=plist.groupbyposting2(Q.byFile[ nfile ],  pageOffsets);
-		pagewithhit.shift(); //the first item is not used (0~Q.byFile[0] )
+		//if (pageOffsets[0]==1)
+		//pagewithhit.shift(); //the first item is not used (0~Q.byFile[0] )
+
 		for (var j=0; j<pagewithhit.length;j++) {
 			if (!pagewithhit[j].length) continue;
 			//var offsets=pagewithhit[j].map(function(p){return p- fileOffsets[i]});
@@ -8278,14 +8406,14 @@ var resultlist=function(engine,Q,opts,cb) {
 	}
 
 	var pagekeys=output.map(function(p){
-		return ["fileContents",p.file,p.page+1];
+		return ["fileContents",p.file,p.page];
 	});
 	//prepare the text
 	engine.get(pagekeys,function(pages){
 		var seq=0;
 		if (pages) for (var i=0;i<pages.length;i++) {
-			var startvpos=files[output[i].file].pageOffsets[output[i].page];
-			var endvpos=files[output[i].file].pageOffsets[output[i].page+1];
+			var startvpos=files[output[i].file].pageOffsets[output[i].page-1];
+			var endvpos=files[output[i].file].pageOffsets[output[i].page];
 			var hl={};
 
 			if (opts.range && opts.range.start && startvpos<opts.range.start ) {
@@ -13195,6 +13323,239 @@ module.exports={
 	loadMarkup:loadMarkup
 }
 });
+require.register("ksana-document/underlines.js", function(exports, require, module){
+/*
+  input : markups start and len
+  output:
+     each token has an array of 
+			[markup idx , start_middle_end , level ]
+
+			markup idx is the nth markup in markup array
+			start=1, middle=0, end=2, both=3
+
+ for converting to css style
+
+ base on http://codepen.io/anon/pen/fHben by exebook@gmail.com
+*/
+var getTextLen=function(markups) {
+	var textlen=0;
+	markups.map(function(m){
+		if (m[0]+m[1]>textlen) textlen=m[0]+m[1];
+	});
+	return textlen;
+}
+
+var calculateLevels=function(M) {
+	//M = M.sort(function(a, b) { return b.len - a.len } ); // sort longest first
+	var textlen=getTextLen(M);
+	var levels=[],out=[];
+	for (var i = 0; i < textlen; i++) levels[i] = [];
+
+	for (var i = 0; i < M.length; i++) {
+		var max = -1, pos = M[i][0], count = M[i][1];
+		// find how many taken levels are here
+		for (var x = pos; x < pos + count; x++) {
+			if (levels[x].length > max) max = levels[x].length;
+		}
+		// check if there is an empty level
+		var level = max;
+		for (var l = 0; l < max; l++) {
+			var ok = true ;
+			for (var m = pos; m < pos + count; m++) {
+				if (levels[m][l] != undefined) { ok = false; break }
+			}
+			if (ok) { level = l; break }
+		}
+		out.push([i,level]);
+		// fill the level
+		for (var x = pos; x < pos + count; x++)	levels[x][level] = i;
+	}
+	return out;
+}
+
+var TAG_START=0, TAG_END=1;
+var fixOverlaps=function(S) {
+	// insert extra tags because we cannot have overlaps in html
+	var out = [], stack = [] ,lstack=[];
+	for (var i = S.length - 1; i >= 0; i--) {
+		var id=S[i][0], pos=S[i][1],tagtype=S[i][2], level=S[i][3];
+		if (tagtype == TAG_START) { 
+			stack.push(id);
+			lstack.push(level);
+			out.unshift(S[i]);
+		}	else if (tagtype == TAG_END) {
+			if (id == stack[stack.length - 1]) {
+				stack.pop();
+				lstack.pop();
+				out.unshift(S[i]);
+			} else {
+				var z = stack.length - 1;
+				while (z > 0 && stack[z] != id) {
+					out.unshift([stack[z], pos, TAG_END, lstack[z]]);
+					z--;
+				}
+				out.unshift([stack[z], pos, TAG_END, lstack[z]]);
+				stack.splice(z, 1);
+				lstack.splice(z, 1);
+				while (z < stack.length) {
+					out.unshift([stack[z], pos, TAG_START,  lstack[z]]);
+					z++;
+				}
+			} 
+		}
+	}
+	return out
+}
+var levelMarkups=function(M) {
+	var P=calculateLevels(M), S = [];
+	var backward=function(a, b){ 
+		if (b[1] == a[1]) {
+				if (b[2] == TAG_START && a[2] == TAG_END) return 1;
+				if (a[2] == TAG_START && b[2] == TAG_END) return -1;
+			}
+			return b[1] - a[1];
+	};
+	var forward=function(a, b){ 
+				if (b[1] == a[1]) {
+					if (b[2] == TAG_START && a[2] == TAG_END) return -1;
+					if (a[2] == TAG_START && b[2] == TAG_END) return 1;
+				}
+				return a[1] - b[1];
+	};
+
+	for (var p = 0; p < P.length; p++) {
+		S.push([p,M[p][0],TAG_START,P[p][1]]); // id, pos, tagtype, level
+		S.push([p,M[p][0]+M[p][1],TAG_END,P[p][1]]);
+	}
+	S = S.sort(backward);
+			
+	/* s[0] == markup id , s[1]==pos , s[2]==tagtype  */
+	S = fixOverlaps(S);
+	//if (!inverse) S = S.sort(forward);		
+	return S;
+}
+var renderXML=function(tokens, M) {
+	var S=levelMarkups(M,true);
+
+	var idx=0,out="";
+	for (var i=tokens.length;i>0;i--) {
+		while (idx<S.length && S[idx][1]==i) {
+			var id=S[idx][0], tagtype=S[idx][2] ;
+			var tag = M[id][2] , level=S[idx][3] ; //level=P[id][1];
+			if (tagtype==TAG_START) out= '<'+tag+' lv="'+level+'">' +out;
+			if (tagtype==TAG_END) out= '</'+tag+'>' +out;
+			idx++;
+		}
+		out=tokens[i-1]+out;
+	}
+	return out;//return text
+}
+module.exports={calculateLevels:calculateLevels, 
+	levelMarkups:levelMarkups,renderXML:renderXML,
+  TAG_START:TAG_START,TAG_END:TAG_END};
+
+/*
+var indexOfSorted = function (array, obj) {  //taken from ksana-document/bsearch.js
+  var low = 0,
+  high = array.length;
+  while (low < high) {
+    var mid = (low + high) >> 1;
+    if (array[mid]==obj) return mid;
+    array[mid] < obj ? low = mid + 1 : high = mid;
+  }
+	if (array[low]==obj) return low;else return -1;
+};
+
+var getTextLen=function(markups) {
+	var textlen=0;
+	markups.map(function(m){
+		if (m[0]+m[1]>textlen) textlen=m[0]+m[1];
+	});
+	return textlen;
+}
+
+var calculateLevel=function(markups,textlen) {
+	textlen=textlen||getTextLen(markups);
+	var startarr=markups.map(function(m,idx){return [m[0],idx]})
+	              .sort(function(a,b){return a[0]-b[0]});
+
+	var startat =startarr.map(function(m){return m[0]});
+	var startidx=startarr.map(function(m){return m[1]});
+
+	var endarr  =markups.map(function(m,idx){return [m[0]+m[1]-1,idx]})
+	              .sort(function(a,b){return a[0]-b[0]});
+
+	var endat =endarr.map(function(m){return m[0]}); // sort by token offset
+	var endidx=endarr.map(function(m){return m[1]}); //markup index
+	
+	var levels=[],level=0;
+	var out=[];
+	for (var i=0;i<textlen;i++) {
+		var tokenout=[]; 
+		var starts=[],ends=[];
+		var mstart=indexOfSorted(startat,i); //don't need , because one pass
+		while (startat[mstart]==i) {  //find out all markups start at this token
+			starts.push(startidx[mstart]);
+			mstart++;
+		}
+
+		var mend=indexOfSorted(endat,i);
+		while (endat[mend]==i) {  // find out all markups end at this token
+			ends.push(endidx[mend]); //push the idx in markups
+			mend++;
+		}
+
+		//insert new markup
+		starts.map(function(s,idx){
+			var j=0;
+			while (typeof levels[j]!=="undefined") j++;
+			levels[j]=[s,1];
+		});
+		
+		//marked the ended
+		ends.map(function(e,idx){
+			for (var j=0;j<levels.length;j++) {
+				var lv=levels[j];
+				if (!lv) continue;
+				if (lv[0]==e) lv[1]+=2;//mark end
+			}
+		});
+
+		levels.map(function(lv,idx,L){
+			if (!lv) return ;
+			tokenout.push([lv[0],lv[1],idx]);
+			if(lv[1]==1) lv[1]=0;
+			else if (lv[1]>=2) L[idx]=undefined; //remove the ended markup
+		});
+		
+		out[i]=tokenout;
+	}
+	//levels.length , max level 
+
+	return out;
+}
+
+var renderXML=function(tokens,markups,levels) {
+	var out=[];
+	for (var i=0;i<tokens.length;i++) {
+		var s=tokens[i];
+		if (levels[i]) {
+			for (var j=0;j<levels[i].length;j++) {
+				var lv=levels[i][j];
+				var tag=markups[lv[0]][2];
+				if ((lv[1]&1)==1) {
+					s="<"+tag+">"+s;
+				} else if ((lv[1]&2)==2) {
+					s=s+"</"+tag+">";
+				}
+			}
+		}
+		//out+=s;
+	}
+	return out;
+}
+*/
+});
 require.register("ksanaforge-fileinstaller/index.js", function(exports, require, module){
 /** @jsx React.DOM */
 
@@ -13345,8 +13706,7 @@ var filelist = React.createClass({displayName: 'filelist',
 var filemanager = React.createClass({displayName: 'filemanager',
 	getInitialState:function() {
 		var quota=this.getQuota();
-		return {browserReady:false,noupdate:true,
-			requestQuota:quota,remain:0};
+		return {browserReady:false,noupdate:true,	requestQuota:quota,remain:0};
 	},
 	getQuota:function() {
 		var q=this.props.quota||"128M";
@@ -13357,6 +13717,7 @@ var filemanager = React.createClass({displayName: 'filemanager',
 		return parseInt(q) * times;
 	},
 	missingKdb:function() {
+		if (typeof ksanagap!="undefined") return [];
 		var missing=this.props.needed.filter(function(kdb){
 			for (var i in html5fs.files) {
 				if (html5fs.files[i][0]==kdb.filename) return false;
@@ -13391,6 +13752,13 @@ var filemanager = React.createClass({displayName: 'filemanager',
 	  },this);
 	},
 	onQuoteOk:function(quota,usage) {
+		if (typeof ksanagap!="undefined") {
+			console.log("onquoteok");
+			this.setState({noupdate:true,missing:[],files:[],autoclose:true
+				,quota:quota,remain:quota-usage});
+			return;
+		}
+		console.log("quote ok");
 		var files=this.genFileList(html5fs.files,this.missingKdb());
 		var that=this;
 		that.checkIfUpdate(files,function(hasupdate) {
@@ -13492,7 +13860,8 @@ require.register("ksanaforge-checkbrowser/index.js", function(exports, require, 
 /** @jsx React.DOM */
 
 var checkfs=function() {
-	return (navigator && navigator.webkitPersistentStorage);
+	return (navigator && navigator.webkitPersistentStorage) || 
+	(typeof ksanagap!="undefined");
 }
 var featurechecks={
 	"fs":checkfs
@@ -13629,9 +13998,13 @@ var htmlfs = React.createClass({displayName: 'htmlfs',
 		},0);
 	},
 	queryQuota:function() {
-		html5fs.queryQuota(function(usage,quota){
-			this.setState({usage:usage,quota:quota,initialized:true});
-		},this);
+		if (typeof ksanagap=="undefined") {
+			html5fs.queryQuota(function(usage,quota){
+				this.setState({usage:usage,quota:quota,initialized:true});
+			},this);			
+		} else {
+			this.setState({usage:333,quota:1000*1000*1024,initialized:true,autoclose:true});
+		}
 	},
 	render:function() {
 		var that=this;
@@ -13704,15 +14077,17 @@ var main = React.createClass({displayName: 'main',
     
   }, 
   getInitialState: function() {
-    return {res:{},db:null};
+    return {res:{},db:null,bodytext:{file:0}};
   },
   encodeHashTag:function(f,p) { //file/page to hash tag
     var pagename=this.state.db.getFilePageNames(f)[p];
-    return "#"+f+"."+p;
+    return "#"+(f+1)+"."+pagename;
   },
   decodeHashTag:function(s) {
+    if (!s)return;
     var fp=s.match(/#(\d)+\.(.*)/);
-    this.setPage(fp[2],fp[1]);
+    var file=parseInt(fp[1])-1;
+    this.setPage(fp[2],file);
   },
   goHashTag:function() {
     this.decodeHashTag(window.location.hash);
@@ -13733,7 +14108,7 @@ var main = React.createClass({displayName: 'main',
     if (this.state.db) {
       return (   
         //"則為正"  "為正觀" both ok
-        React.DOM.div(null, React.DOM.input( {onKeyPress:this.keypress, ref:"tofind", defaultValue:"嘉義"}),
+        React.DOM.div(null, React.DOM.input( {onKeyPress:this.keypress, ref:"tofind", defaultValue:"印"}),
         React.DOM.button( {ref:"btnsearch", onClick:this.dosearch}, "GO")
         )
         ) 
@@ -13779,6 +14154,7 @@ var main = React.createClass({displayName: 'main',
   },
   showPage:function(f,p,hideResultlist) {
     window.location.hash = this.encodeHashTag(f,p);
+
     kse.highlightPage(this.state.db,f,p,{q:this.state.q},function(data){
       this.setState({bodytext:data});
       if (hideResultlist) this.setState({res:[]});
@@ -13807,6 +14183,13 @@ var main = React.createClass({displayName: 'main',
     var p=pagenames.indexOf(newpagename);
     if (p>-1) this.showPage(file,p);
   },
+  filepage2vpos:function() {
+    var offsets=this.state.db.getFilePageOffsets(this.state.bodytext.file);
+    return offsets[this.state.bodytext.page];
+  },
+  syncToc:function() {
+    this.setState({goVoff:this.filepage2vpos()});
+  },
   render: function() {  //main render routine
     if (!this.state.quota) { // install required db
         return this.openFileinstaller(true);
@@ -13820,7 +14203,9 @@ var main = React.createClass({displayName: 'main',
       React.DOM.div(null, 
         this.state.dialog?this.openFileinstaller():null,
         React.DOM.div( {className:"col-md-3"}, 
-          stacktoc( {showText:this.showText, showExcerpt:this.showExcerpt, hits:this.state.res.rawresult, data:this.state.toc})),
+          stacktoc( 
+            {showText:this.showText, showExcerpt:this.showExcerpt, hits:this.state.res.rawresult, 
+            data:this.state.toc, goVoff:this.state.goVoff} )),
           React.DOM.div( {className:"col-md-4"}, 
           
           React.DOM.span(null, this.state.elapse),
@@ -13832,7 +14217,8 @@ var main = React.createClass({displayName: 'main',
              showtext( {pagename:pagename, text:text, 
              nextpage:this.nextpage, 
              setpage:this.setPage,
-             prevpage:this.prevpage} )
+             prevpage:this.prevpage, 
+             syncToc:this.syncToc})
           )
 
       )
@@ -14013,7 +14399,19 @@ var stacktoc = React.createClass({displayName: 'stacktoc',
     n=parseInt(n);
     this.setState({cur:n});
   },
-
+  findByVoff:function(voff) {
+    for (var i=0;i<this.props.data.length;i++) {
+      var t=this.props.data[i];
+      if (t.voff>voff) return i-1;
+    }
+    return 0; //return root node
+  },
+  shouldComponentUpdate:function(nextProps,nextState) {
+    if (nextProps.goVoff&&nextProps.goVoff !=this.props.goVoff) {
+      nextState.cur=this.findByVoff(nextProps.goVoff);
+    }
+    return true;
+  },
   fillHit:function(nodeIds) {
     if (typeof nodeIds=="number") nodeIds=[nodeIds];
     var toc=this.props.data;
@@ -14114,11 +14512,15 @@ var controls = React.createClass({displayName: 'controls',
     nextState.pagename=nextProps.pagename;
     return true;
   },
+  gotoToc:function() {
+    this.props.syncToc();
+  },
   render: function() {   
    return React.DOM.div(null, 
       React.DOM.button( {onClick:this.props.prev}, "←"),
        React.DOM.input( {type:"text", ref:"pagename", onChange:this.updateValue, value:this.state.pagename}),
-      React.DOM.button( {onClick:this.props.next}, "→")
+      React.DOM.button( {onClick:this.props.next}, "→"),
+      React.DOM.button( {onClick:this.gotoToc}, "Toc")
       )
   }  
 });
@@ -14131,7 +14533,8 @@ var showtext = React.createClass({displayName: 'showtext',
     return (
       React.DOM.div(null, 
         controls( {pagename:this.props.pagename, next:this.props.nextpage, 
-        prev:this.props.prevpage, setpage:this.props.setpage}),
+        prev:this.props.prevpage, setpage:this.props.setpage,
+        syncToc:this.props.syncToc}),
        
         React.DOM.div( {dangerouslySetInnerHTML:{__html: this.props.text}} )
       )
@@ -14194,6 +14597,7 @@ require.alias("ksana-document/kdbw.js", "yinshun/deps/ksana-document/kdbw.js");
 require.alias("ksana-document/kdb_sync.js", "yinshun/deps/ksana-document/kdb_sync.js");
 require.alias("ksana-document/kdbfs_sync.js", "yinshun/deps/ksana-document/kdbfs_sync.js");
 require.alias("ksana-document/html5fs.js", "yinshun/deps/ksana-document/html5fs.js");
+require.alias("ksana-document/kdbfs_ksanagap.js", "yinshun/deps/ksana-document/kdbfs_ksanagap.js");
 require.alias("ksana-document/kse.js", "yinshun/deps/ksana-document/kse.js");
 require.alias("ksana-document/kde.js", "yinshun/deps/ksana-document/kde.js");
 require.alias("ksana-document/boolsearch.js", "yinshun/deps/ksana-document/boolsearch.js");
@@ -14211,6 +14615,7 @@ require.alias("ksana-document/concordance.js", "yinshun/deps/ksana-document/conc
 require.alias("ksana-document/regex.js", "yinshun/deps/ksana-document/regex.js");
 require.alias("ksana-document/bsearch.js", "yinshun/deps/ksana-document/bsearch.js");
 require.alias("ksana-document/persistentmarkup_pouchdb.js", "yinshun/deps/ksana-document/persistentmarkup_pouchdb.js");
+require.alias("ksana-document/underlines.js", "yinshun/deps/ksana-document/underlines.js");
 require.alias("ksana-document/index.js", "yinshun/deps/ksana-document/index.js");
 require.alias("ksana-document/index.js", "ksana-document/index.js");
 require.alias("ksana-document/index.js", "ksana-document/index.js");
